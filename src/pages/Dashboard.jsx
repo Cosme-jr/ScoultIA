@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
-import { Trophy, TrendingUp, Users, Target, Activity } from 'lucide-react';
+import { Trophy, TrendingUp, Users, Target, Activity, Plus, Loader2 } from 'lucide-react';
 
 const Dashboard = () => {
   const [ranking, setRanking] = useState([]);
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
 
   useEffect(() => {
     fetchRanking();
@@ -28,11 +30,19 @@ const Dashboard = () => {
 
   return (
     <div className="min-h-screen bg-dark text-white p-6 font-['JetBrains_Mono']">
-      <header className="mb-8">
-        <h1 className="text-5xl font-['Bebas_Neue'] text-primary tracking-wider mb-2">
-          DASHBOARD DE PERFORMANCE
-        </h1>
-        <p className="text-gray-400">Análise em tempo real do plantel ScoultIA</p>
+      <header className="mb-8 flex justify-between items-end">
+        <div>
+          <h1 className="text-5xl font-['Bebas_Neue'] text-primary tracking-wider mb-2">
+            DASHBOARD DE PERFORMANCE
+          </h1>
+          <p className="text-gray-400">Análise em tempo real do plantel ScoultIA</p>
+        </div>
+        <button 
+          onClick={() => navigate('/analise')}
+          className="bg-primary text-dark font-bold py-3 px-6 rounded-lg flex items-center gap-2 hover:shadow-[0_0_20px_rgba(0,212,255,0.4)] transition-all uppercase text-sm tracking-tight"
+        >
+          <Plus size={20} /> Nova Análise
+        </button>
       </header>
 
       {/* Stats Overview */}
@@ -64,9 +74,11 @@ const Dashboard = () => {
           </h2>
           <button 
             onClick={fetchRanking}
-            className="text-xs font-bold py-2 px-4 rounded bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30 transition-all uppercase tracking-tighter"
+            disabled={loading}
+            className="flex items-center gap-2 text-xs font-bold py-2 px-4 rounded bg-primary/20 text-primary border border-primary/30 hover:bg-primary/30 transition-all uppercase tracking-tighter disabled:opacity-50"
           >
-            Atualizar Dados
+            {loading && <Loader2 size={14} className="animate-spin" />}
+            {loading ? 'Sincronizando...' : 'Atualizar Dados'}
           </button>
         </div>
         
@@ -102,11 +114,14 @@ const Dashboard = () => {
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center text-[10px] font-bold border border-white/10">
+                      <div 
+                        className="flex items-center gap-3 cursor-pointer group/atleta"
+                        onClick={() => navigate(`/performance/${atleta.id || atleta.profissional_id}`)}
+                      >
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center text-[10px] font-bold border border-white/10 group-hover/atleta:border-primary/50 transition-all">
                           {atleta.nome?.substring(0, 2).toUpperCase()}
                         </div>
-                        <span className="font-medium group-hover:text-primary transition-colors">
+                        <span className="font-medium group-hover/atleta:text-primary transition-colors border-b border-transparent group-hover/atleta:border-primary/30">
                           {atleta.nome}
                         </span>
                       </div>
@@ -120,11 +135,11 @@ const Dashboard = () => {
                     <td className="px-6 py-4 text-center font-bold text-sm">{atleta.gols || 0}</td>
                     <td className="px-6 py-4 text-center font-bold text-sm">{atleta.assistencias || 0}</td>
                     <td className="px-6 py-4 text-right leading-none">
-                      <span className="text-lg font-bold text-primary">{atleta.nota_media?.toFixed(1) || '0.0'}</span>
+                      <span className="text-lg font-bold text-primary">{atleta.media_tecnica?.toFixed(1) || '0.0'}</span>
                       <div className="w-16 h-1 bg-white/10 mt-1 ml-auto rounded-full overflow-hidden">
                         <div 
                           className="h-full bg-primary" 
-                          style={{ width: `${(atleta.nota_media || 0) * 10}%` }}
+                          style={{ width: `${(atleta.media_tecnica || 0) * 10}%` }}
                         />
                       </div>
                     </td>
