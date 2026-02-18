@@ -107,15 +107,11 @@ const AnaliseScout = () => {
     <div className="min-h-screen bg-dark text-white p-6 font-['JetBrains_Mono']">
       <header className="mb-8 flex items-center justify-between">
         <div>
-          <button 
-            onClick={() => navigate('/dashboard')}
-            className="flex items-center gap-2 text-primary hover:text-white transition-colors mb-4 text-xs uppercase tracking-widest"
-          >
-            <ArrowLeft size={16} /> Voltar ao Dashboard
-          </button>
+        <div className="flex items-center gap-6">
           <h1 className="text-5xl font-['Bebas_Neue'] text-primary tracking-wider">
             NOVA ANÁLISE DE SCOUT
           </h1>
+        </div>
         </div>
         <BrainCircuit size={48} className="text-primary opacity-50" />
       </header>

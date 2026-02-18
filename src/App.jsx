@@ -3,6 +3,8 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import AnaliseScout from './pages/AnaliseScout';
 import VisualizacaoPerformance from './pages/VisualizacaoPerformance';
+import Mercado from './pages/Mercado';
+import Layout from './components/Layout';
 import './App.css';
 
 function App() {
@@ -10,9 +12,13 @@ function App() {
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/analise" element={<AnaliseScout />} />
-        <Route path="/performance/:atletaId" element={<VisualizacaoPerformance />} />
+        
+        {/* Rotas Protegidas/Com Layout */}
+        <Route path="/dashboard" element={<Layout><Dashboard /></Layout>} />
+        <Route path="/analise" element={<Layout><AnaliseScout /></Layout>} />
+        <Route path="/mercado" element={<Layout><Mercado /></Layout>} />
+        <Route path="/performance/:atletaId" element={<Layout><VisualizacaoPerformance /></Layout>} />
+        
         <Route path="/" element={<Navigate to="/login" replace />} />
       </Routes>
     </Router>
