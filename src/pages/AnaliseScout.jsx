@@ -104,7 +104,7 @@ const AnaliseScout = () => {
   };
 
   return (
-    <div className="min-h-screen bg-dark text-white p-6 font-['JetBrains_Mono']">
+    <div className="font-['JetBrains_Mono']">
       <header className="mb-8 flex items-center justify-between">
         <div>
         <div className="flex items-center gap-6">

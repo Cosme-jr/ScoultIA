@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, TrendingUp, UserPlus, Globe, Shield, Loader2, CheckCircle2 } from 'lucide-react';
+import { Search, TrendingUp, UserPlus, Globe, Shield, Loader2, CheckCircle2, ChevronDown } from 'lucide-react';
 import { searchAthlete } from '../services/apiFootball';
 import { supabase } from '../lib/supabaseClient';
 
@@ -9,8 +9,55 @@ const Mercado = () => {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(null);
-  const [selectedRegion, setSelectedRegion] = useState('global');
+  const [selectedLeague, setSelectedLeague] = useState('71'); // Padrão: Brasil Série A
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const navigate = useNavigate();
+
+  const leagues = [
+    {
+      category: "Brasil (Joias)",
+      items: [
+        { id: '71', name: 'Série A' },
+        { id: '72', name: 'Série B' }
+      ]
+    },
+    {
+      category: "América Latina",
+      items: [
+        { id: '128', name: 'Argentina' }
+      ]
+    },
+    {
+      category: "Mercado Árabe",
+      items: [
+        { id: '307', name: 'Saudi Pro League' }
+      ]
+    },
+    {
+      category: "Elite Europeia",
+      items: [
+        { id: '39', name: 'Premier League' },
+        { id: '140', name: 'La Liga' },
+        { id: '135', name: 'Serie A Itália' }
+      ]
+    },
+    {
+      category: "Celeiro Europeu",
+      items: [
+        { id: '88', name: 'Holanda/Eredivisie' },
+        { id: '94', name: 'Portugal' }
+      ]
+    }
+  ];
+
+  const getSelectedLeagueName = () => {
+    if (selectedLeague === 'global') return '🌎 Global';
+    for (const cat of leagues) {
+      const found = cat.items.find(l => l.id === selectedLeague);
+      if (found) return found.name;
+    }
+    return 'Clubes';
+  };
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -18,8 +65,8 @@ const Mercado = () => {
 
     setLoading(true);
     try {
-      const data = await searchAthlete(query, selectedRegion);
-      console.log(`[Mercado] Resposta da API/Cache para "${query}" (Região: ${selectedRegion}):`, data);
+      const data = await searchAthlete(query, selectedLeague);
+      console.log(`[Mercado] Resposta da API/Cache para "${query}" (Liga: ${selectedLeague}):`, data);
       
       if (Array.isArray(data) && data.length > 0) {
         setResults(data);
@@ -39,50 +86,81 @@ const Mercado = () => {
   const handleImport = async (playerData) => {
     setImporting(playerData.player.id);
     try {
-      // 1. Verificar se o atleta já existe
+      const apiId = Math.floor(Number(playerData.player.id));
+      
+      // 1. Pegar clube_id do usuário logado (Multi-tenancy)
+      const { data: { user } } = await supabase.auth.getUser();
+      const clube_id = user?.user_metadata?.clube_id || '72e07108-9e57-4b9c-954a-e9a68acc9b30'; // Fallback para teste
+
+      // 2. Verificar se o atleta já existe
       const { data: existing } = await supabase
         .from('profissionais')
         .select('id')
-        .eq('api_external_id', playerData.player.id)
+        .eq('api_external_id', apiId)
+        .eq('clube_id', clube_id) // Verificar duplicata no mesmo clube
         .maybeSingle();
 
       if (existing) {
-        alert('Este atleta já está sendo monitorado!');
+        alert('Este atleta já está sendo monitorado pelo seu clube!');
         return;
       }
 
-      // 2. Inserir novo atleta
-      // Mapeamento simples de posição (a API retorna strings como 'Attacker', 'Midfielder', etc.)
-      const posMap = {
-        'Goalkeeper': 'Goleiro',
-        'Defender': 'Defensor',
-        'Midfielder': 'Meia',
-        'Attacker': 'Atacante'
+      // 3. Inserir novo atleta com campos completos e mapeamento de ENUM
+      function mapPositionToEnum(apiPosition) {
+        const map = {
+          'Goalkeeper': 'GOL',
+          'Goleiro': 'GOL',
+          'Defender': 'ZAG',
+          'Zagueiro': 'ZAG',
+          'Defensor': 'ZAG',
+          'Lateral': 'LD',
+          'Midfielder': 'MEI',
+          'Meio-Campo': 'MEI',
+          'Meia': 'MEI',
+          'Attacker': 'ATA',
+          'Atacante': 'ATA',
+          'Forward': 'ATA'
+        };
+        return map[apiPosition] || 'MEI'; // fallback
+      }
+
+      const apiPosition = playerData.statistics[0]?.games?.position || 'Midfielder';
+      const mappedPosition = mapPositionToEnum(apiPosition);
+
+      const payload = {
+        clube_id: clube_id,
+        api_external_id: apiId,
+        nome: playerData.player.name,
+        foto: playerData.player.photo,
+        time_atual: playerData.statistics[0]?.team?.name || 'Sem Clube',
+        posicao: mappedPosition,
+        nacionalidade: playerData.player.nationality,
+        idade: Math.floor(Number(playerData.player.age))
       };
+
+      console.log('[Mercado] Tentando importar atleta:', payload);
 
       const { error } = await supabase
         .from('profissionais')
-        .insert([{
-          nome: playerData.player.name,
-          posicao: posMap[playerData.statistics[0]?.games?.position] || 'Atleta',
-          api_external_id: playerData.player.id,
-          //clube_id será nulo por padrão ou podemos vincular a um clube 'Mercado' se houver
-        }]);
+        .insert([payload]);
 
-      if (error) throw error;
+      if (error) {
+        console.error('Erro Supabase:', error);
+        throw error;
+      }
 
       alert(`${playerData.player.name} importado com sucesso para o Plantel!`);
       navigate('/dashboard');
     } catch (err) {
       console.error('Erro ao importar atleta:', err);
-      alert('Falha ao importar atleta.');
+      alert('Falha ao importar atleta. Verifique o console para mais detalhes.');
     } finally {
       setImporting(null);
     }
   };
 
   return (
-    <div className="p-8 animate-fade-in">
+    <div className="animate-fade-in">
       <header className="mb-12">
         <div className="flex items-center gap-3 mb-2">
           <Globe className="text-[#00e5ff]" size={20} />
@@ -118,34 +196,55 @@ const Mercado = () => {
           </button>
         </div>
 
-        {/* Seleção de Região */}
-        <div className="flex gap-2 mt-4 overflow-x-auto pb-2 scrollbar-hide">
-           {[
-             { id: 'global', name: '🌍 Global' },
-             { id: '71', name: '🇧🇷 Brasil' },
-             { id: '307', name: '🇸🇦 Arábia' },
-             { id: '39', name: '🏴󠁧󠁢󠁥󠁮󠁧󠁿 Europa (PL)' },
-             { id: '13', name: '🇪🇸 Espanha' },
-             { id: '140', name: '🇮🇹 Itália' }
-           ].map((region) => (
-             <button
-               key={region.id}
-               type="button"
-               onClick={() => setSelectedRegion(region.id)}
-               className={`whitespace-nowrap px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all border ${
-                 selectedRegion === region.id 
-                   ? 'bg-[#00e5ff] text-[#0b111b] border-[#00e5ff]' 
-                   : 'bg-white/5 text-gray-400 border-white/10 hover:border-white/20'
-               }`}
-             >
-               {region.name}
-             </button>
-           ))}
+        {/* Seletor de Ligas - Dropdown Premium */}
+        <div className="relative mt-4">
+          <button
+            type="button"
+            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+            className="flex items-center gap-3 bg-white/10 backdrop-blur-md border border-white/20 px-6 py-3 rounded-xl text-xs font-black uppercase tracking-widest text-[#00e5ff] hover:bg-white/20 transition-all"
+          >
+            <Globe size={18} />
+            {getSelectedLeagueName()}
+            <ChevronDown size={14} className={`transition-transform duration-300 ${isDropdownOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {isDropdownOpen && (
+            <div className="absolute left-0 mt-2 w-72 bg-[#0b111b]/95 backdrop-blur-xl border border-white/10 rounded-2xl p-4 shadow-2xl z-50 animate-in fade-in zoom-in duration-200">
+              <div className="max-h-80 overflow-y-auto custom-scrollbar space-y-4">
+                <button
+                  type="button"
+                  onClick={() => { setSelectedLeague('global'); setIsDropdownOpen(false); }}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold uppercase transition-all ${selectedLeague === 'global' ? 'bg-[#00e5ff] text-[#0b111b]' : 'text-gray-400 hover:bg-white/5'}`}
+                >
+                  🌎 Mercado Global
+                </button>
+
+                {leagues.map((category) => (
+                  <div key={category.category} className="space-y-1">
+                    <p className="px-3 text-[9px] font-black text-gray-600 uppercase tracking-[0.2em] mb-2">{category.category}</p>
+                    {category.items.map((league) => (
+                      <button
+                        key={league.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedLeague(league.id);
+                          setIsDropdownOpen(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-[11px] font-bold transition-all ${selectedLeague === league.id ? 'bg-[#00e5ff]/20 text-[#00e5ff] border border-[#00e5ff]/30' : 'text-gray-300 hover:bg-white/5 border border-transparent'}`}
+                      >
+                        {league.name}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </form>
 
       {/* Grid de Resultados */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {results.length > 0 ? results.map((item) => (
           <div key={item.player.id} className="bg-white/5 border border-white/10 rounded-[2rem] p-6 hover:border-[#00e5ff]/30 transition-all group relative overflow-hidden">
             <div className="flex items-center gap-6 mb-6">

@@ -1,17 +1,138 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
+import { syncAthleteStats } from '../services/apiFootball';
 import { Trophy, TrendingUp, Users, Target, Activity, Plus, Loader2, Search, Filter, EyeOff, Eye } from 'lucide-react';
 
 const Dashboard = () => {
   const [ranking, setRanking] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [kpis, setKpis] = useState({
     total: 0,
     avgPerformance: 0,
     medicalDept: 0,
     highlight: 'N/A'
   });
+    
+  const handleGlobalSync = async () => {
+    try {
+      setSyncing(true);
+      console.log('[Sync] Iniciando sincronização global...');
+
+      // Diagnóstico de Autenticação para RLS
+      const { data: { session } } = await supabase.auth.getSession();
+      console.log('[Sync Auth Debug] Sessão ativa:', session ? 'SIM' : 'NÃO');
+      console.log('[Sync Auth Debug] Role:', session?.user?.role || 'anon');
+
+      // 1. Buscar atletas atuais cadastrados
+      const { data: atletas, error: fetchError } = await supabase
+        .from('profissionais')
+        .select('id, api_external_id, nome');
+
+      if (fetchError) throw fetchError;
+
+      console.log(`[Sync] Sincronizando ${atletas.length} atletas em paralelo...`);
+      
+      await Promise.all(atletas.map(async (atleta) => {
+        if (!atleta.api_external_id) return;
+        
+        try {
+          // Busca dados agregados da API
+          const stats = await syncAthleteStats(atleta.api_external_id, 2024, true);
+          
+          if (stats) {
+            // --- BLOCO: Garantir clube_id (Resolvendo Erro 23502) ---
+            const clubName = stats.time_atual || 'Sem Clube';
+            let finalClubeId = null;
+
+            // Busca por nome
+            const { data: existingClub } = await supabase
+              .from('clubes')
+              .select('id')
+              .eq('nome', clubName)
+              .maybeSingle();
+
+            if (existingClub) {
+              finalClubeId = existingClub.id;
+              console.log(`[Sync] Clube encontrado: ${clubName} (ID: ${finalClubeId})`);
+            } else {
+              console.log(`[Sync] Clube "${clubName}" não existe. Criando novo...`);
+              const { data: newClub, error: clubError } = await supabase
+                .from('clubes')
+                .insert({ nome: clubName })
+                .select('id')
+                .single();
+
+              if (!clubError && newClub) {
+                finalClubeId = newClub.id;
+                console.log(`[Sync] Novo clube criado: ${clubName} (ID: ${finalClubeId})`);
+              } else {
+                console.warn(`[Sync Warning] Falha ao criar clube "${clubName}":`, clubError?.message);
+                // Fallback de segurança: buscar novamente caso tenha sido criado em paralelo
+                const { data: retryClub } = await supabase.from('clubes').select('id').eq('nome', clubName).maybeSingle();
+                if (retryClub) finalClubeId = retryClub.id;
+              }
+            }
+
+            // Validação Crítica: Se não tiver clube_id, não podemos fazer UPSERT (evita erro 23502)
+            if (!finalClubeId) {
+              console.error(`[Sync ERROR] Não foi possível obter clube_id para ${atleta.nome}. Operação abortada para este atleta.`);
+              return;
+            }
+
+            const rating = Number(stats.rating) || 0;
+            const payload = {
+              api_external_id: Number(stats.api_external_id),
+              nome: stats.nome,
+              foto: stats.foto,
+              time_atual: stats.time_atual,
+              clube_id: finalClubeId, // GARANTIDO NOT NULL
+              nacionalidade: stats.nacionalidade,
+              idade: Number(stats.idade),
+              // Estatísticas principais (mantendo nomes consistentes com o banco e view)
+              total_gols: Number(stats.goals) || 0,
+              total_assistencias: Number(stats.assists) || 0,
+              total_scouts: Number(stats.appearences) || 0,
+              // Pilares de Performance
+              media_tecnica: Number(Number(Math.min(10, rating)).toFixed(2)),
+              media_tatica: Number(Number(Math.min(10, rating * 0.9)).toFixed(2)),
+              media_fisica: Number(Number(Math.min(10, rating * 0.95)).toFixed(2)),
+              media_psicologica: Number(Number(Math.min(10, rating * 0.85)).toFixed(2))
+            };
+
+            console.log(`[Sync Payload Final] ${atleta.nome}:`, payload);
+            
+            // UPSERT Definitivo
+            const { data: updateData, error: updateError } = await supabase
+              .from('profissionais')
+              .upsert(payload, { onConflict: 'api_external_id' })
+              .select();
+
+            if (updateError) {
+              console.error(`[Supabase 400 Debug] Erro ao salvar ${atleta.nome}:`, updateError);
+              throw updateError;
+            }
+            
+            if (updateData) {
+              console.log(`[Sync Success] Atleta ${atleta.nome} sincronizado com sucesso no banco.`);
+            }
+          }
+        } catch (err) {
+          console.error(`[Sync Task Error] Erro ao processar ${atleta.nome}:`, err.message);
+        }
+      }));
+
+      console.log('[Sync] Processo finalizado. Atualizando ranking...');
+      await fetchRanking();
+      alert('Dashboard Atualizado! Os dados reais agregados já estão na tela.');
+    } catch (error) {
+      console.error('[Sync Global Error] Falha crítica:', error.message);
+      alert('Houve um erro na sincronização. Verifique o console.');
+    } finally {
+      setSyncing(false);
+    }
+  };
   
   // Estados de Filtro
   const [searchTerm, setSearchTerm] = useState('');
@@ -32,10 +153,10 @@ const Dashboard = () => {
     const total = data.length;
     const avg = data.reduce((acc, a) => {
       const athleteAvg = (
-        (a.media_tecnica || 0) + 
-        (a.media_tatica || 0) + 
-        (a.media_fisica || 0) + 
-        (a.media_psicologica || 0)
+        (Number(a.media_tecnica) || 0) + 
+        (Number(a.media_tatica) || 0) + 
+        (Number(a.media_fisica) || 0) + 
+        (Number(a.media_psicologica) || 0)
       ) / 4;
       return acc + athleteAvg;
     }, 0) / total;
@@ -112,7 +233,12 @@ const Dashboard = () => {
         (posMap[posFilter]?.some(p => atleta.posicao?.includes(p)));
 
       // 3. Filtro de Nota IA (Média Geral)
-      const avgPerf = ((atleta.media_tecnica || 0) + (atleta.media_tatica || 0) + (atleta.media_fisica || 0) + (atleta.media_psicologica || 0)) / 4;
+      const avgPerf = (
+        (Number(atleta.media_tecnica) || 0) + 
+        (Number(atleta.media_tatica) || 0) + 
+        (Number(atleta.media_fisica) || 0) + 
+        (Number(atleta.media_psicologica) || 0)
+      ) / 4;
       const matchesGrade = avgPerf >= parseFloat(gradeFilter);
 
       // 4. Filtro de DM
@@ -124,7 +250,7 @@ const Dashboard = () => {
   }, [ranking, searchTerm, posFilter, gradeFilter, hideMedical, injuredIds]);
 
   return (
-    <div className="min-h-screen bg-[#0b111b] text-white p-8 font-['JetBrains_Mono']">
+    <div className="font-['JetBrains_Mono']">
       <header className="mb-12 flex justify-between items-end">
         <div>
           <h1 className="text-6xl font-['Bebas_Neue'] text-primary tracking-wider mb-2">
@@ -134,11 +260,11 @@ const Dashboard = () => {
         </div>
         <div className="flex items-center gap-4">
           <button 
-            onClick={fetchRanking}
-            disabled={loading}
+            onClick={handleGlobalSync}
+            disabled={loading || syncing}
             className="flex items-center gap-2 text-[10px] font-black py-4 px-8 rounded-xl bg-primary/10 text-primary border border-primary/20 hover:bg-primary/30 transition-all uppercase tracking-widest"
           >
-            {loading ? <Loader2 size={14} className="animate-spin" /> : 'Sincronizar Dados'}
+            {syncing ? <Loader2 size={14} className="animate-spin" /> : 'Sincronizar Dados'}
           </button>
         </div>
       </header>
@@ -296,12 +422,22 @@ const Dashboard = () => {
                       <td className="px-8 py-6 text-right leading-none">
                         <div className="inline-flex flex-col items-end">
                           <span className="text-2xl font-['Bebas_Neue'] text-primary tracking-widest">
-                            {(( (atleta.media_tecnica || 0) + (atleta.media_tatica || 0) + (atleta.media_fisica || 0) + (atleta.media_psicologica || 0) ) / 4).toFixed(1)}
+                            {((
+                              (Number(atleta.media_tecnica) || 0) + 
+                              (Number(atleta.media_tatica) || 0) + 
+                              (Number(atleta.media_fisica) || 0) + 
+                              (Number(atleta.media_psicologica) || 0)
+                            ) / 4).toFixed(1)}
                           </span>
                           <div className="w-20 h-1.5 bg-white/5 mt-1.5 rounded-full overflow-hidden">
                              <div 
                                className="h-full bg-primary shadow-[0_0_10px_rgba(0,212,255,0.8)] transition-all duration-1000" 
-                               style={{ width: `${(( (atleta.media_tecnica || 0) + (atleta.media_tatica || 0) + (atleta.media_fisica || 0) + (atleta.media_psicologica || 0) ) / 4) * 10}%` }}
+                               style={{ width: `${((
+                                 (Number(atleta.media_tecnica) || 0) + 
+                                 (Number(atleta.media_tatica) || 0) + 
+                                 (Number(atleta.media_fisica) || 0) + 
+                                 (Number(atleta.media_psicologica) || 0)
+                               ) / 4) * 10}%` }}
                              />
                           </div>
                         </div>

@@ -2,6 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Ocultar barra de rolagem globalmente */
+* {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE e Edge */
+}
+
+*::-webkit-scrollbar {
+  display: none; /* Chrome, Safari e Opera */
+}
+
+
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;

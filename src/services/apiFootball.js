@@ -13,7 +13,7 @@ const api = axios.create({
 });
 
 // Função de Proxy com Cache Inteligente
-export const fetchWithCache = async (endpoint, params = {}, ttlHours = 24) => {
+export const fetchWithCache = async (endpoint, params = {}, ttlHours = 24, forceRefresh = false) => {
   if (!API_FOOTBALL_KEY) {
     console.error('CRITICAL: VITE_FOOTBALL_API_KEY is missing in .env');
   }
@@ -22,65 +22,56 @@ export const fetchWithCache = async (endpoint, params = {}, ttlHours = 24) => {
     .replace(/[^a-zA-Z0-9_]/g, '_')
     .substring(0, 255);
 
-  // 1. Tentar buscar no cache do Supabase (< 24h)
-  try {
-    const { data: cached } = await supabase
-      .from('api_football_cache')
-      .select('*')
-      .eq('query_key', queryKey)
-      .maybeSingle();
+  // 1. Tentar buscar no cache do Supabase (< 24h) - Apenas se NÃO for forceRefresh
+  if (!forceRefresh) {
+    try {
+      const { data: cached } = await supabase
+        .from('api_football_cache')
+        .select('*')
+        .eq('query_key', queryKey)
+        .maybeSingle();
 
-    if (cached && (new Date() - new Date(cached.updated_at) < ttlHours * 60 * 60 * 1000)) {
-      const finalData = cached.data?.response || cached.data;
-      const dataArray = Array.isArray(finalData) ? finalData : [];
-      
-      if (dataArray.length > 0) {
-        console.log(`[Cache HIT] ${queryKey}`);
-        return dataArray;
+      if (cached && (new Date() - new Date(cached.updated_at) < ttlHours * 60 * 60 * 1000)) {
+        const finalData = cached.data?.response || cached.data;
+        const dataArray = Array.isArray(finalData) ? finalData : [];
+        
+        if (dataArray.length > 0) {
+          console.log(`[Cache HIT] ${queryKey}`);
+          return dataArray;
+        }
       }
+    } catch (cacheError) {
+      console.warn(`[Supabase Cache Bypass] Erro:`, cacheError.message);
     }
-  } catch (cacheError) {
-    console.warn(`[Supabase Cache Bypass] Erro:`, cacheError.message);
+  } else {
+    console.log(`[Cache BYPASS] Forçando atualização para ${queryKey}`);
   }
 
-  // 2. Cache MISS ou falha no DB: Fazer a requisição oficial
+  // 2. Cache MISS ou falha no DB ou forceRefresh: Fazer a requisição oficial
+  // ... (rest of the function stays same)
   try {
     const finalParams = { ...params };
     
     console.log(`[API REQUEST] ${endpoint}`, finalParams);
     const response = await api.get(endpoint, { params: finalParams });
     
-    // Debug: Ver resposta exata da API
-    if (response.data?.errors && Object.keys(response.data.errors).length > 0) {
-      console.error(`[API ERROR] Erros reportados pela API-Football:`, response.data.errors);
-    }
-
-    // MAPEAMENTO: Garantir que pegamos res.data.response
     const result = response.data?.response || [];
     
-    // Debug caso o retorno seja inesperado ou vazio
-    if (result.length === 0) {
-      console.warn(`[API EMPTY] Resposta sem resultados para ${endpoint}. Data completa:`, response.data);
-    }
-
-    // 3. Tentar salvar no banco de forma assíncrona
+    // 3. Salvar/Atualizar no banco
     if (result && Array.isArray(result) && result.length > 0) {
       (async () => {
         const { error: storeError } = await supabase.from('api_football_cache').upsert({
           query_key: queryKey,
-          data: result, // Salvamos apenas o array puro
+          data: result,
           updated_at: new Date().toISOString()
-        });
-        if (storeError) console.warn('[Supabase Cache Store Fail] Erro ao salvar cache:', storeError.message);
+        }, { onConflict: 'query_key' });
+        if (storeError) console.warn('[Supabase Cache Store Fail] Erro:', storeError.message);
       })();
     }
 
     return result;
   } catch (apiError) {
     console.error(`Erro crítico na API (${endpoint}):`, apiError.message);
-    if (apiError.response) {
-      console.error(`Status: ${apiError.response.status}, Data:`, apiError.response.data);
-    }
     throw apiError;
   }
 };
@@ -95,11 +86,11 @@ export const searchAthlete = async (name, leagueId = null) => {
     const DEFAULT_SEASON = 2024;
     const cleanName = normalizeName(name);
 
-    console.log(`[Busca Inteligente] Iniciando busca para "${cleanName}" (Original: "${name}")...`);
+    console.log(`[Busca Inteligente] Iniciando busca para "${cleanName}"...`);
     
-    // 1. Se uma liga foi selecionada manualmente, buscar apenas nela
+    // 1. Prioridade Máxima: Usar League ID se selecionado
     if (leagueId && leagueId !== 'global') {
-       console.log(`[Busca Inteligente] Buscando especificamente na Liga: ${leagueId}, Season: ${DEFAULT_SEASON}`);
+       console.log(`[Busca Inteligente] Buscando especificamente na Liga: ${leagueId}`);
        return await fetchWithCache('/players', { 
          search: cleanName, 
          season: DEFAULT_SEASON,
@@ -107,21 +98,13 @@ export const searchAthlete = async (name, leagueId = null) => {
        });
     }
 
-    // 2. Se for 'global' ou nada selecionado, tentar busca sem liga primeiro (pode falhar no Free, mas tentamos)
-    console.log(`[Busca Inteligente] Tentando busca global (Season ${DEFAULT_SEASON})...`);
-    const resultsGlobal = await fetchWithCache('/players', { 
-      search: cleanName, 
-      season: DEFAULT_SEASON
-    });
-
-    if (Array.isArray(resultsGlobal) && resultsGlobal.length > 0) {
-      return resultsGlobal;
-    }
-
-    // 3. Fallback Automático: Tentar em ligas principais se a busca global não retornar nada
-    const fallbackLeagues = [71, 307, 39]; // Brasil, Arábia, Premier
-    for (const id of fallbackLeagues) {
-      console.log(`[Busca Inteligente] Fallback: Tentando Liga ${id}...`);
+    // 2. Fallback Inteligente: Evitar "Busca Global" (sem league) pois costuma falhar/ser bloqueada por falta de filtros.
+    // Em vez disso, tentamos em ligas principais se nada foi selecionado.
+    console.log(`[Busca Inteligente] Sem liga específica. Tentando ligas principais...`);
+    const mainLeagues = [71, 307, 39]; // Brasil, Arábia, Premier
+    
+    for (const id of mainLeagues) {
+      console.log(`[Busca Inteligente] Tentando Liga ${id}...`);
       const results = await fetchWithCache('/players', { 
         search: cleanName, 
         season: DEFAULT_SEASON,
@@ -132,7 +115,7 @@ export const searchAthlete = async (name, leagueId = null) => {
       }
     }
 
-    console.warn(`[Busca Inteligente] Nenhuma informação encontrada para "${cleanName}" em 2024.`);
+    console.warn(`[Busca Inteligente] Nenhuma informação encontrada para "${cleanName}".`);
     return [];
   } catch (error) {
     console.error('[Busca Inteligente] Erro crítico na busca:', error.message);
@@ -156,3 +139,53 @@ export const getAthleteStats = async (athleteId, season = 2025) => {
   }
 };
 
+export const syncAthleteStats = async (athleteId, season = 2024, forceRefresh = false) => {
+  try {
+    const response = await fetchWithCache('/players', { id: athleteId, season }, 24, forceRefresh);
+    if (!response || response.length === 0) return null;
+
+    const player = response[0];
+    const allStats = player.statistics || [];
+
+    // Agregando estatísticas de todas as competições na temporada
+    const aggregated = allStats.reduce((acc, stat, idx) => {
+      const g = stat.goals?.total || 0;
+      const a = stat.goals?.assists || 0;
+      const app = stat.games?.appearences || 0;
+      const rStr = stat.games?.rating;
+      const r = parseFloat(rStr) || 0;
+
+      console.log(`[API Aggregation] Compra ${idx}: ${stat.league?.name} -> G: ${g}, A: ${a}, P: ${app}, R: ${r}`);
+
+      acc.goals += g;
+      acc.assists += a;
+      acc.appearences += app;
+      
+      if (r > 0) acc.ratings.push(r);
+      return acc;
+    }, { goals: 0, assists: 0, appearences: 0, ratings: [] });
+
+    const avgRating = aggregated.ratings.length > 0 
+      ? aggregated.ratings.reduce((a, b) => a + b, 0) / aggregated.ratings.length 
+      : 0;
+
+    const result = {
+      api_external_id: player.player.id,
+      nome: player.player.name,
+      foto: player.player.photo,
+      time_atual: allStats[0]?.team?.name || 'Sem Clube',
+      nacionalidade: player.player.nationality,
+      idade: player.player.age,
+      goals: aggregated.goals,
+      assists: aggregated.assists,
+      appearences: aggregated.appearences,
+      rating: avgRating
+    };
+
+    console.log(`[API Sync Result] Final para ${player.player.name}:`, result);
+    return result;
+  } catch (error) {
+    console.error(`[API Sync] Erro ao sincronizar atleta ${athleteId}:`, error.message);
+    return null;
+  }
+};

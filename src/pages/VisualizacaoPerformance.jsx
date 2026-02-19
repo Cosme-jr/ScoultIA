@@ -210,7 +210,7 @@ const VisualizacaoPerformance = () => {
   ];
 
   return (
-    <div className="min-h-screen bg-[#0b111b] text-white p-6 font-['JetBrains_Mono'] selection:bg-[#00e5ff]/30">
+    <div className="font-['JetBrains_Mono'] selection:bg-[#00e5ff]/30">
       <div id="capture-report" className="bg-[#0b111b] p-2 md:p-6 lg:p-10 rounded-[2rem]">
         <header className="mb-12 max-w-7xl mx-auto">
           <div className="flex justify-between items-center mb-8">
