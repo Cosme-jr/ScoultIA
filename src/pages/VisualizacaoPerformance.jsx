@@ -25,6 +25,10 @@ const VisualizacaoPerformance = () => {
   const [showSearch, setShowSearch] = useState(false);
   const [selectedSeason, setSelectedSeason] = useState(2025);
 
+  useEffect(() => {
+    fetchAtletaData();
+  }, [atletaId]);
+
   // Função para calcular duração de lesão
   const calculateDuration = (start, end) => {
     if (!start) return 0;
@@ -33,10 +37,6 @@ const VisualizacaoPerformance = () => {
     const diffTime = Math.abs(endDate - startDate);
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   };
-
-  useEffect(() => {
-    fetchAtletaData();
-  }, [atletaId]);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -84,8 +84,8 @@ const VisualizacaoPerformance = () => {
       if (error) throw error;
       setAtleta(data);
 
-      // Buscar dados da API-Football se houver ID vinculado
-      const apiIdToUse = data.api_external_id || null;
+      // Buscar dados da API-Football se houver ID vinculado (Uso de Optional Chaining para evitar crash)
+      const apiIdToUse = data?.api_external_id || null;
       
       if (apiIdToUse) {
         setApiLoading(true);

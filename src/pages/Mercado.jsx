@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, TrendingUp, UserPlus, Globe, Shield, Loader2, CheckCircle2, ChevronDown } from 'lucide-react';
-import { searchAthlete } from '../services/apiFootball';
+import { searchAthlete, syncAthleteStats } from '../services/apiFootball';
 import { supabase } from '../lib/supabaseClient';
 
 const Mercado = () => {
@@ -140,16 +140,24 @@ const Mercado = () => {
 
       console.log('[Mercado] Tentando importar atleta:', payload);
 
-      const { error } = await supabase
+      const { data: newPlayer, error } = await supabase
         .from('profissionais')
-        .insert([payload]);
+        .insert([payload])
+        .select()
+        .single();
 
       if (error) {
         console.error('Erro Supabase:', error);
         throw error;
       }
 
-      alert(`${playerData.player.name} importado com sucesso para o Plantel!`);
+      // 4. Sincronizar dados imediatamente após importar
+      console.log(`[Mercado] Atleta ${playerData.player.name} importado com ID Externo: ${apiId}. Iniciando Sync...`);
+      
+      const currentSeason = 2024; // Poderia ser dinâmico, mas mantendo o padrão do Dashboard
+      await syncAthleteStats(apiId, currentSeason, true, newPlayer.id);
+
+      alert(`${playerData.player.name} importado com sucesso para o Plantel com estatísticas reais!`);
       navigate('/dashboard');
     } catch (err) {
       console.error('Erro ao importar atleta:', err);
